@@ -1,69 +1,81 @@
-# Palmora Bay — Open-World Crime Game
+# Palmora Bay
 
-A standalone, original top-down open-world crime game in the spirit of GTA 6.
-One self-contained file: `index.html` (inline CSS + JS, canvas 2D, no external
-assets, no network, no content from any commercial game). All art is drawn in
-code; all sound is WebAudio beeps.
+An original top-down open-world crime game in the spirit of GTA 6, built
+for the make.fun "Make GTA 6" bounty. Everything here is made from scratch:
+one file, `index.html`, with inline CSS and JavaScript on a canvas 2D
+renderer. No libraries, no downloaded assets, no network requests, and
+nothing borrowed from any commercial game — the city, the cars, the people
+and the sounds are all drawn or synthesized in code.
 
-## How to run
+## Play it
 
 ```sh
 cd game
 python3 -m http.server 8000
-# open http://127.0.0.1:8000/index.html
+# then open http://127.0.0.1:8000/index.html
 ```
 
-Or just double-click `index.html` to open it directly in a browser.
-Click **START GAME** (this also enables sound).
+You can also open `index.html` straight from disk. Click **START GAME**
+(the click also unlocks sound).
 
 ## Controls
 
-| Key | Action |
-|---|---|
-| WASD / Arrow keys | Move on foot; in a car: W gas, S brake/reverse, A/D steer |
-| E | Enter / exit the nearest car (stealing a car raises wanted) |
-| P | Pause / resume |
+- **WASD / arrow keys** — walk on foot. In a car: W accelerates, S brakes
+  and reverses, A/D steer.
+- **E** — get into (or out of) the nearest car. Taking a car that is not
+  yours is a crime: the wanted level goes up.
+- **P** — pause and resume.
 
 ## The city
 
-Palmora Bay is a 2400×1800 world: a road grid, buildings with lit windows,
-sidewalks, a park, and a beach + water edge on the east side. Traffic cars
-drive the roads and pedestrians walk the sidewalks.
+Palmora Bay is a 2400×1800 map: a grid of roads with sidewalks, buildings
+with lit windows, a park, and a beach with water along the east edge.
+Traffic cars cruise the roads and pedestrians stroll the sidewalks, so
+the streets feel alive whether you are walking or driving.
 
-## Wanted level (1–5 stars)
+## Wanted level — 1 to 5 stars
 
-- Stealing a car: +1 star. Hitting a pedestrian: +2. Ramming police: +1.
-- Police cars spawn and chase you; being rammed by them drains health.
-  At 0 HP you wake up at the hospital, wanted cleared.
-- Wanted decays when you commit no crime for ~6 seconds **and** stay more
-  than ~420 px away from any police car (about 2 s per star after that).
-  Hide, or outrun them in a car (top speed beats police).
+Crime attracts the police, and the police fight back:
 
-## Missions
+- Steal a car: +1 star. Hit a pedestrian: +2. Ram a police car: +1.
+- Police cars spawn and chase you, and their rams drain your health.
+  Reach 0 HP and you wake up at the hospital with a clean slate.
+- If you stop committing crimes and keep every police car more than
+  ~420 px away, the heat fades — roughly one star every 2 seconds after
+  about 6 seconds of quiet. Hide in the park, or outrun them: a stolen
+  car's top speed beats a police cruiser's.
 
-1. **Steal a car & deliver it** — press E near a parked car, drive into the
-   yellow zone (bottom-right, on the 1800 road). Reward **$200**.
-2. **Collect 5 packages** — green `$` packages on roads around the city,
-   on foot or in a car. Reward **$300**.
-3. **Escape a 3-star wanted level** — wanted is set to ★★★; survive until
-   it decays to 0. Reward **$500**. Total $1,000, then free roam.
+## Missions — $1,000 total
 
-## HUD
+1. **Grand theft delivery** — press E next to a parked car, then drive it
+   into the yellow zone on the south-east road. Pays **$200**.
+2. **Package run** — pick up 5 green `$` packages scattered on the roads,
+   on foot or by car. Pays **$300**.
+3. **Hot escape** — the wanted level jumps to 3 stars. Survive until it
+   decays back to 0. Pays **$500**.
 
-Cash, wanted stars, health bar, speed, current mission objective, and a
-minimap (top-right: orange = you, white = cars, red = police, yellow =
-delivery zone, green = packages).
+Finish all three and the game opens up into free roam.
 
-## Save / load
+## On screen
 
-Cash + mission progress auto-save to `localStorage` (`palmora-bay-save-v1`)
-on every mission completion. Reopening the game shows the saved progress
-on the start screen and continues from it.
+The HUD shows cash, wanted stars, a health bar, your speed, and the
+current objective. The minimap (top-right) marks you in orange, traffic
+in white, police in red, the delivery zone in yellow, and packages in
+green.
 
-## Files
+## Saving
 
-- `game/index.html` — the whole game
+Every completed mission auto-saves cash and mission progress to
+`localStorage` under `palmora-bay-save-v1`. Reopen the game and the start
+screen tells you a save was found — your progress is right where you
+left it.
+
+## Repo layout
+
+- `game/index.html` — the entire game
 - `game/README.md` — this file
-- `TESTS.md` — what was tested
-- `playtest.py` — automated headless playtest (Playwright + Chromium)
-- `screenshots/` — screenshots from the headless playtest
+- `TESTS.md` — what the automated playtest checks
+- `playtest.py` — the headless Playwright playtest (15 checks)
+- `screenshots/` — 4 screenshots taken by the playtest (the first is the cover)
+- `main.ts` — hands `game/` and `screenshots/` to the make.fun grader
+- `vendor/makefun-game.ts` — the kit's dossier library, unchanged

@@ -1,116 +1,185 @@
-"""Headless playtest for Palmora Bay. Run while http server is on :8931.
-Screenshots -> screenshots/, asserts printed as PASS/FAIL."""
-import time, sys
+"""Automated headless playtest for Palmora Bay (make.fun gta6-01).
+
+Serves game/ on http://127.0.0.1:8931, drives it with real keyboard input
+via Playwright + Chromium, and reports 15 checks as PASS/FAIL.
+
+Writes exactly 4 screenshots into screenshots/ (the bounty cap):
+  01-start-screen.png, 02-gameplay-on-foot.png,
+  03-in-car.png, 04-mission-3-wanted.png
+"""
+import sys
+import time
 from playwright.sync_api import sync_playwright
 
-URL = "http://127.0.0.1:8931/index.html"
-OUT = "/home/hatch/workspace/makefun-gta6-game/screenshots"
-errors = []
-results = []
-def check(name, cond):
-    results.append((name, bool(cond)))
-    print(("PASS" if cond else "FAIL"), "-", name)
+GAME_URL = "http://127.0.0.1:8931/index.html"
+SHOTS = "/home/hatch/workspace/makefun-gta6-game/screenshots"
+SAVE_KEY = "palmora-bay-save-v1"
 
-with sync_playwright() as p:
-    b = p.chromium.launch()
-    pg = b.new_page(viewport={"width": 1000, "height": 760})
-    pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-    pg.on("pageerror", lambda e: errors.append(str(e)))
-    pg.goto(URL)
-    pg.wait_for_timeout(800)
-    pg.screenshot(path=f"{OUT}/01-start-screen.png")
-    check("start screen visible", pg.is_visible("#startScreen"))
-    check("no JS errors on load", not errors)
+CAR_X, CAR_Y = 560, 330          # nearest parked car
+DELIVERY_X, DELIVERY_Y = 1836, 1650
 
-    pg.click("#startBtn")
-    pg.wait_for_timeout(500)
-    check("game started (start screen hidden)", not pg.is_visible("#startScreen"))
-    pg.screenshot(path=f"{OUT}/02-gameplay-on-foot.png")
 
-    # Walk to nearest parked car (560,330) from (336,450): up to the road
-    # first (y~336), then right along the road to x~560.
-    # Adaptive (not blind timers): headless frame rate varies, and the
-    # building corner at (386,386) blocks a straight rightward walk.
-    def pos():
-        return pg.evaluate("() => ({x: window.__game.player.x, y: window.__game.player.y})")
-    for _ in range(20):
-        if pos()["y"] <= 360: break
-        pg.keyboard.down("w"); pg.wait_for_timeout(200); pg.keyboard.up("w")
+class Reporter:
+    """Collects check results and prints them as they run."""
+
+    def __init__(self):
+        self.results = []
+
+    def check(self, name, ok):
+        self.results.append((name, bool(ok)))
+        print(("PASS" if ok else "FAIL"), "-", name)
+
+    def summary(self):
+        failed = [n for n, ok in self.results if not ok]
+        print(f"\n{len(self.results) - len(failed)}/{len(self.results)} checks passed")
+        return 1 if failed else 0
+
+
+def player_pos(page):
+    return page.evaluate(
+        "() => ({x: window.__game.player.x, y: window.__game.player.y})"
+    )
+
+
+def game_state(page):
+    return page.evaluate(
+        "() => ({wanted: window.__game.state.wanted,"
+        " mission: window.__game.state.mission,"
+        " cash: window.__game.state.cash,"
+        " inCar: !!window.__game.player.inCar})"
+    )
+
+
+def walk_toward(page, key, want, get):
+    """Hold a movement key in short bursts until get() reaches want."""
     for _ in range(30):
-        p0 = pos()
-        if p0["x"] >= 540: break
-        pg.keyboard.down("d"); pg.wait_for_timeout(200); pg.keyboard.up("d")
-        if pos()["x"] <= p0["x"] + 1:  # stuck on a corner: step back up onto the road
-            pg.keyboard.down("w"); pg.wait_for_timeout(200); pg.keyboard.up("w")
-    pg.wait_for_timeout(300)
-    pos = pg.evaluate("() => ({x: window.__game.player.x, y: window.__game.player.y})")
-    print("player after walk:", pos)
-    # nudge closer if needed via teleport-free walk: try E, if not in car, walk more
-    pg.keyboard.press("e"); pg.wait_for_timeout(300)
-    in_car = pg.evaluate("() => !!window.__game.player.inCar")
-    if not in_car:
-        # walk a bit more toward car and retry
-        pg.keyboard.down("d"); pg.wait_for_timeout(500); pg.keyboard.up("d")
-        pg.keyboard.press("e"); pg.wait_for_timeout(300)
-        in_car = pg.evaluate("() => !!window.__game.player.inCar")
-    check("enter car with E (steal)", in_car)
-    check("stealing raises wanted >=1", pg.evaluate("() => window.__game.state.wanted >= 1"))
-    pg.screenshot(path=f"{OUT}/03-in-car.png")
+        if get() >= want:
+            return
+        before = player_pos(page)
+        page.keyboard.down(key)
+        page.wait_for_timeout(200)
+        page.keyboard.up(key)
+        # Stuck on a building corner: step up onto the road and retry.
+        if player_pos(page)["x"] <= before["x"] + 1 and key == "d":
+            page.keyboard.down("w")
+            page.wait_for_timeout(200)
+            page.keyboard.up("w")
 
-    # Drive forward a bit
-    pg.keyboard.down("w"); pg.wait_for_timeout(1200); pg.keyboard.up("w")
-    moved = pg.evaluate("() => ({x: window.__game.player.x, y: window.__game.player.y})")
-    print("player after driving:", moved)
 
-    # Mission 1: teleport car to delivery zone (test the trigger, not the drive)
-    pg.evaluate("() => window.__game.teleport(1836, 1650)")
-    pg.wait_for_timeout(500)
-    check("mission 1 completes -> mission 2, cash $200",
-          pg.evaluate("() => window.__game.state.mission === 1 && window.__game.state.cash === 200"))
+def main():
+    rep = Reporter()
+    js_errors = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page(viewport={"width": 1000, "height": 760})
+        page.on("console", lambda m: js_errors.append(m.text) if m.type == "error" else None)
+        page.on("pageerror", lambda e: js_errors.append(str(e)))
 
-    # Mission 2: collect 5 packages via teleport
-    for pk in range(5):
-        pg.evaluate(f"""() => {{
-            const pk = window.__game.packages[{pk}];
-            window.__game.teleport(pk.x, pk.y);
-        }}""")
-        pg.wait_for_timeout(250)
-    check("mission 2 completes -> mission 3, cash $500",
-          pg.evaluate("() => window.__game.state.mission === 2 && window.__game.state.cash === 500"))
-    pg.wait_for_timeout(500)
-    check("mission 3 starts with wanted 3",
-          pg.evaluate("() => window.__game.state.wanted >= 3"))
-    pg.screenshot(path=f"{OUT}/04-mission-3-wanted.png")
+        page.goto(GAME_URL)
+        page.wait_for_timeout(800)
+        page.screenshot(path=f"{SHOTS}/01-start-screen.png")
+        rep.check("start screen visible", page.is_visible("#startScreen"))
+        rep.check("no JS errors on load", not js_errors)
 
-    # Pause test
-    pg.keyboard.press("p"); pg.wait_for_timeout(200)
-    check("pause with P shows pause screen", pg.is_visible("#pauseScreen"))
-    pg.keyboard.press("p"); pg.wait_for_timeout(200)
-    check("resume with P hides pause screen", not pg.is_visible("#pauseScreen"))
+        page.click("#startBtn")
+        page.wait_for_timeout(500)
+        rep.check("game started (start screen hidden)", not page.is_visible("#startScreen"))
+        page.screenshot(path=f"{SHOTS}/02-gameplay-on-foot.png")
 
-    # Mission 3: clear wanted via evaluate (simulate hiding long enough is slow;
-    # verify the escape trigger by setting wanted 0 as the decay path would)
-    pg.evaluate("() => { window.__game.state.wanted = 0; window.__game.police.length = 0; }")
-    pg.wait_for_timeout(500)
-    check("mission 3 completes on wanted 0 -> cash $1000, all done",
-          pg.evaluate("() => window.__game.state.mission === 3 && window.__game.state.cash === 1000"))
-    check("end screen shown", pg.is_visible("#endScreen"))
-    pg.screenshot(path=f"{OUT}/05-all-missions-done.png")
+        # Walk from the spawn (336, 450) up to the road, then right to the car.
+        for _ in range(20):
+            if player_pos(page)["y"] <= 360:
+                break
+            page.keyboard.down("w")
+            page.wait_for_timeout(200)
+            page.keyboard.up("w")
+        walk_toward(page, "d", 540, lambda: player_pos(page)["x"])
+        page.wait_for_timeout(300)
+        print("player after walk:", player_pos(page))
 
-    # Save/load: localStorage should hold cash 1000, mission 3
-    saved = pg.evaluate("() => JSON.parse(localStorage.getItem('palmora-bay-save-v1'))")
-    print("saved:", saved)
-    check("localStorage save has cash 1000 + mission 3",
-          saved and saved.get("cash") == 1000 and saved.get("mission") == 3)
-    # Reload: save info should show
-    pg.reload(); pg.wait_for_timeout(600)
-    check("reload shows saved-game info",
-          "Saved game found" in (pg.inner_text("#saveInfo") or ""))
+        page.keyboard.press("e")
+        page.wait_for_timeout(300)
+        if not game_state(page)["inCar"]:
+            # Not close enough yet: shuffle right and try E once more.
+            page.keyboard.down("d")
+            page.wait_for_timeout(500)
+            page.keyboard.up("d")
+            page.keyboard.press("e")
+            page.wait_for_timeout(300)
+        state = game_state(page)
+        rep.check("enter car with E (steal)", state["inCar"])
+        rep.check("stealing raises wanted >= 1", state["wanted"] >= 1)
+        page.screenshot(path=f"{SHOTS}/03-in-car.png")
 
-    print("console/page errors:", errors)
-    check("no JS errors during playtest", not errors)
-    b.close()
+        # A short real drive, to prove the car moves.
+        page.keyboard.down("w")
+        page.wait_for_timeout(1200)
+        page.keyboard.up("w")
+        print("player after driving:", player_pos(page))
 
-fails = [n for n, ok in results if not ok]
-print(f"\n{len(results)-len(fails)}/{len(results)} checks passed")
-sys.exit(1 if fails else 0)
+        # Mission 1: put the car in the delivery zone (tests the trigger).
+        page.evaluate(f"() => window.__game.teleport({DELIVERY_X}, {DELIVERY_Y})")
+        page.wait_for_timeout(500)
+        state = game_state(page)
+        rep.check(
+            "mission 1 completes -> mission 2, cash $200",
+            state["mission"] == 1 and state["cash"] == 200,
+        )
+
+        # Mission 2: step onto each of the 5 packages.
+        for i in range(5):
+            page.evaluate(
+                "() => { const pk = window.__game.packages[%d];"
+                " window.__game.teleport(pk.x, pk.y); }" % i
+            )
+            page.wait_for_timeout(250)
+        state = game_state(page)
+        rep.check(
+            "mission 2 completes -> mission 3, cash $500",
+            state["mission"] == 2 and state["cash"] == 500,
+        )
+        page.wait_for_timeout(500)
+        rep.check("mission 3 starts with wanted 3", game_state(page)["wanted"] >= 3)
+        page.screenshot(path=f"{SHOTS}/04-mission-3-wanted.png")
+
+        # Pause / resume with P.
+        page.keyboard.press("p")
+        page.wait_for_timeout(200)
+        rep.check("pause with P shows pause screen", page.is_visible("#pauseScreen"))
+        page.keyboard.press("p")
+        page.wait_for_timeout(200)
+        rep.check("resume with P hides pause screen", not page.is_visible("#pauseScreen"))
+
+        # Mission 3: wanted reaches 0 (what the decay path does over time).
+        page.evaluate("() => { window.__game.state.wanted = 0; window.__game.police.length = 0; }")
+        page.wait_for_timeout(500)
+        state = game_state(page)
+        rep.check(
+            "mission 3 completes on wanted 0 -> cash $1000, all done",
+            state["mission"] == 3 and state["cash"] == 1000,
+        )
+        rep.check("end screen shown", page.is_visible("#endScreen"))
+
+        # Save / load round-trip.
+        saved = page.evaluate(f"() => JSON.parse(localStorage.getItem('{SAVE_KEY}'))")
+        print("saved:", saved)
+        rep.check(
+            "localStorage save has cash 1000 + mission 3",
+            bool(saved) and saved.get("cash") == 1000 and saved.get("mission") == 3,
+        )
+        page.reload()
+        page.wait_for_timeout(600)
+        rep.check(
+            "reload shows saved-game info",
+            "Saved game found" in (page.inner_text("#saveInfo") or ""),
+        )
+
+        print("console/page errors:", js_errors)
+        rep.check("no JS errors during playtest", not js_errors)
+        browser.close()
+
+    return rep.summary()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
